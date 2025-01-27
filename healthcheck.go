@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
     // "k8s.io/client-go/tools/clientcmd/api"
 )
-var healthStatusCmd = &cobra.Command{
+var HealthStatusCmd = &cobra.Command{
     Use:   "health-status [deployment-id]",
     Short: "Retrieve health status of a deployment",
     Args:  cobra.ExactArgs(1),

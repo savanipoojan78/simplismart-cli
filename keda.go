@@ -9,7 +9,7 @@ import (
 	// "k8s.io/client-go/tools/clientcmd/api"
 )
 
-var installKEDACmd = &cobra.Command{
+var InstallKEDACmd = &cobra.Command{
 	Use:   "install-keda",
 	Short: "Install KEDA on the Kubernetes cluster",
 	Run: func(cmd *cobra.Command, args []string) {

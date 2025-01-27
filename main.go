@@ -12,10 +12,11 @@ import (
 
 func main() {
 	var rootCmd = &cobra.Command{Use: "simplismart-cli"}
-	rootCmd.AddCommand(connectCmd)
-	rootCmd.AddCommand(installKEDACmd)
-	rootCmd.AddCommand(createDeploymentCmd)
-	rootCmd.AddCommand(healthStatusCmd)
+	rootCmd.AddCommand(ConnectCmd)
+	rootCmd.AddCommand(InstallKEDACmd)
+	rootCmd.AddCommand(CreateDeploymentCmd)
+	rootCmd.AddCommand(HealthStatusCmd)
+	rootCmd.AddCommand(DoctorCmd) // Added the doctor command
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)

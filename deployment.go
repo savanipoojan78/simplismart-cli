@@ -9,7 +9,7 @@ import (
 	// "k8s.io/client-go/tools/clientcmd/api"
 )
 
-var createDeploymentCmd = &cobra.Command{
+var CreateDeploymentCmd = &cobra.Command{
 	Use:   "create-deployment",
 	Short: "Create a deployment in the Kubernetes cluster",
 	Run: func(cmd *cobra.Command, args []string) {
