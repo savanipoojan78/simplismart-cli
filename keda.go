@@ -8,8 +8,6 @@ import (
 	// "k8s.io/client-go/tools/clientcmd"
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 	// "k8s.io/client-go/tools/clientcmd/api"
 )
 
@@ -17,16 +15,8 @@ var InstallKEDACmd = &cobra.Command{
 	Use:   "install-keda",
 	Short: "Install KEDA on the Kubernetes cluster",
 	Run: func(cmd *cobra.Command, args []string) {
-		// Create a Kubernetes client from the current context
-		config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-			clientcmd.NewDefaultClientConfigLoadingRules(),
-			&clientcmd.ConfigOverrides{}).ClientConfig()
-		if err != nil {
-			fmt.Println("Error creating Kubernetes client config:", err)
-			return
-		}
 		// Create a Kubernetes client
-		clientset, err := kubernetes.NewForConfig(config)
+		clientset, err := GetK8sClient()
 		if err != nil {
 			fmt.Println("Error creating Kubernetes client:", err)
 			return
@@ -40,7 +30,7 @@ var InstallKEDACmd = &cobra.Command{
 			fmt.Println("KEDA is not running, installing...")
 			// Install KEDA using Helm
 			// Combine Helm commands into a single command execution
-			helmCmd := exec.Command("sh", "-c", "helm repo add kedacore https://kedacore.github.io/charts && helm repo update && helm install keda kedacore/keda --namespace " + namespace + " --create-namespace")
+			helmCmd := exec.Command("sh", "-c", "helm repo add kedacore https://kedacore.github.io/charts && helm repo update && helm install keda kedacore/keda --namespace "+namespace+" --create-namespace")
 			output, err := helmCmd.CombinedOutput()
 			if err != nil {
 				fmt.Println("Error installing KEDA:", err)

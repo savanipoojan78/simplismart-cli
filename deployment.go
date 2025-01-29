@@ -2,19 +2,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 
-	"k8s.io/apimachinery/pkg/api/errors"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/spf13/cobra"
 	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 var CreateDeploymentCmd = &cobra.Command{
@@ -30,39 +30,28 @@ var CreateDeploymentCmd = &cobra.Command{
 		ramRequest, _ := cmd.Flags().GetString("ram-request")
 		ramLimit, _ := cmd.Flags().GetString("ram-limit")
 		ports, _ := cmd.Flags().GetStringSlice("ports")
-		hpaTarget, _ := cmd.Flags().GetString("hpa-target")
-		eventSource, _ := cmd.Flags().GetString("event-source")
+		cpuTarget, _ := cmd.Flags().GetString("cpu-utilization")
+		memoryTarget, _ := cmd.Flags().GetString("memory-utilization")
 
-		// Create Kubernetes client
-		config, err := clientcmd.BuildConfigFromFlags("", clientcmd.RecommendedHomeFile)
-		if err != nil {
-			panic(err.Error())
-		}
-
-		clientset, err := kubernetes.NewForConfig(config)
+		clientset, err := GetK8sClient()
 		if err != nil {
 			panic(err.Error())
 		}
 
 		// Create or update the deployment
-		_ = createDeployment(name, namespace, image, ports, cpuRequest, cpuLimit, ramRequest, ramLimit, clientset)
+		deployment := createDeployment(name, namespace, image, ports, cpuRequest, cpuLimit, ramRequest, ramLimit, clientset)
 		// Create Service
-		_ = createService(name, namespace, ports, clientset)
+		service := createService(name, namespace, ports, clientset)
 
 		// Create HPA
-		if hpaTarget != "" {
-			hpa := createHPA(name, namespace, hpaTarget)
-			_, err = clientset.AutoscalingV2().HorizontalPodAutoscalers(namespace).Create(context.TODO(), hpa, metav1.CreateOptions{})
-			if err != nil {
-				panic(fmt.Errorf("failed to create HPA: %v", err))
-			}
-			fmt.Printf("Created HPA %s\n", hpa.Name)
+		err = createScaleObject(name, namespace, cpuTarget, memoryTarget, clientset)
+		if err != nil {
+			fmt.Printf("Error creating KEDA Scale Object: %v", err)
 		}
-
-		// Event source would typically be used with KEDA ScaledObjects
-		if eventSource != "" {
-			fmt.Printf("Event source '%s' could be used for KEDA scaling configuration\n", eventSource)
-		}
+		// Print deployment and service details
+		fmt.Printf("Deployment Name: %s\n", deployment.Name)
+		fmt.Printf("Service Name: %s\n", service.Name)
+		fmt.Printf("Service IP: %s\n", service.Spec.LoadBalancerIP) // Print service IP
 	},
 }
 
@@ -77,7 +66,7 @@ func createDeployment(name, namespace, image string, ports []string, cpuReq, cpu
 	}
 	existingDeployment, err := clientset.AppsV1().Deployments(namespace).Get(context.TODO(), name, metav1.GetOptions{})
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if k8serrors.IsNotFound(err) {
 			// Deployment does not exist, create it
 			newDeployment := &appsv1.Deployment{
 				ObjectMeta: metav1.ObjectMeta{
@@ -155,7 +144,7 @@ func createService(name, namespace string, ports []string, clientset *kubernetes
 	// Check if the service already exists
 	existingService, err := clientset.CoreV1().Services(namespace).Get(context.TODO(), fmt.Sprintf("%s-service", name), metav1.GetOptions{})
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if k8serrors.IsNotFound(err) {
 			// Service does not exist, create it
 			newService := &corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{
@@ -165,7 +154,7 @@ func createService(name, namespace string, ports []string, clientset *kubernetes
 				Spec: corev1.ServiceSpec{
 					Selector: map[string]string{"app": name},
 					Ports:    servicePorts,
-					Type:     corev1.ServiceTypeClusterIP,
+					Type:     corev1.ServiceTypeLoadBalancer,
 				},
 			}
 			createdService, err := clientset.CoreV1().Services(namespace).Create(context.TODO(), newService, metav1.CreateOptions{})
@@ -187,37 +176,120 @@ func createService(name, namespace string, ports []string, clientset *kubernetes
 	fmt.Printf("Updated service %s\n", updatedService.Name)
 	return updatedService
 }
-
-func createHPA(name, namespace, metric string) *autoscalingv2.HorizontalPodAutoscaler {
-	return &autoscalingv2.HorizontalPodAutoscaler{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-hpa", name),
-			Namespace: namespace,
+func createScaleObject(name, namespace, cpuTarget, memoryTarget string, clientset *kubernetes.Clientset) error {
+	scaledObject := map[string]interface{}{
+		"apiVersion": "keda.sh/v1alpha1",
+		"kind":       "ScaledObject",
+		"metadata": map[string]interface{}{
+			"name":      name,
+			"namespace": namespace,
 		},
-		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
-			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
-				APIVersion: "apps/v1",
-				Kind:       "Deployment",
-				Name:       name,
+		"spec": map[string]interface{}{
+			"scaleTargetRef": map[string]interface{}{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"name":       name,
 			},
-			MinReplicas: int32Ptr(1),
-			MaxReplicas: 10,
-			Metrics: []autoscalingv2.MetricSpec{
+			"pollingInterval": 15,
+			"cooldownPeriod":  300,
+			"minReplicaCount": 2,
+			"maxReplicaCount": 10,
+			"triggers": []map[string]interface{}{
 				{
-					Type: autoscalingv2.ResourceMetricSourceType,
-					Resource: &autoscalingv2.ResourceMetricSource{
-						Name: corev1.ResourceName(metric),
-						Target: autoscalingv2.MetricTarget{
-							Type:               autoscalingv2.UtilizationMetricType,
-							AverageUtilization: int32Ptr(50),
-						},
+					"type": "prometheus",
+					"metadata": map[string]interface{}{
+						"serverAddress":       "http://prometheus-server.monitoring.svc.cluster.local",
+						"query":               fmt.Sprintf(`avg(rate(http_request_duration_seconds_sum{app="%s"}[5m])/rate(http_request_duration_seconds_count{app="%s"}[5m]))`, name, name),
+						"threshold":           "0.5",
+						"activationThreshold": "0.4",
+						"queryValue":          "value",
 					},
 				},
 			},
 		},
 	}
-}
+	if cpuTarget != "" { // Check if cpuTarget is provided
+		// Append CPU trigger
+		scaledObject["spec"].(map[string]interface{})["triggers"] = append(scaledObject["spec"].(map[string]interface{})["triggers"].([]map[string]interface{}), map[string]interface{}{
+			"type":       "cpu",
+			"metricType": "Utilization", // Allowed types are 'Utilization' or 'AverageValue'
+			"metadata": map[string]interface{}{
+				"type":  "Utilization", // Deprecated in favor of trigger.metricType; allowed types are 'Utilization' or 'AverageValue'
+				"value": cpuTarget,
+			},
+		})
+	}
+	if memoryTarget != "" {
+		scaledObject["spec"].(map[string]interface{})["triggers"] = append(scaledObject["spec"].(map[string]interface{})["triggers"].([]map[string]interface{}), map[string]interface{}{
+			"type":       "memory",
+			"metricType": "Utilization", // Allowed types are 'Utilization' or 'AverageValue'
+			"metadata": map[string]interface{}{
+				"type":  "Utilization", // Deprecated in favor of trigger.metricType; allowed types are 'Utilization' or 'AverageValue'
+				"value": cpuTarget,
+			},
+		})
+	}
 
+	jsonData, err := json.Marshal(scaledObject)
+	if err != nil {
+		return fmt.Errorf("error marshaling ScaledObject: %v", err)
+	}
+
+	// Check if the ScaledObject already exists
+	_, err = clientset.RESTClient().
+		Get().
+		AbsPath("/apis/keda.sh/v1alpha1").
+		Namespace(namespace).
+		Resource("scaledobjects").
+		Name(name).
+		DoRaw(context.Background())
+
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			// ScaledObject does not exist, create it
+			_, err = clientset.RESTClient().
+				Post().
+				AbsPath("/apis/keda.sh/v1alpha1").
+				Namespace(namespace).
+				Resource("scaledobjects").
+				Body(jsonData).
+				DoRaw(context.Background())
+
+			if err != nil {
+				return fmt.Errorf("error creating ScaledObject: %v", err)
+			}
+
+			fmt.Printf("Created new ScaledObject: %s", name)
+			return nil
+		}
+		return fmt.Errorf("error checking for existing ScaledObject: %v", err)
+	}
+
+	// ScaledObject exists - perform patch
+	patchData := map[string]interface{}{
+		"spec": scaledObject["spec"],
+	}
+
+	jsonPatch, err := json.Marshal(patchData)
+	if err != nil {
+		return fmt.Errorf("error marshaling patch data: %v", err)
+	}
+
+	_, err = clientset.RESTClient().
+		Patch(types.MergePatchType).
+		AbsPath("/apis/keda.sh/v1alpha1").
+		Namespace(namespace).
+		Resource("scaledobjects").
+		Name(name).
+		Body(jsonPatch).
+		DoRaw(context.Background())
+
+	if err != nil {
+		return fmt.Errorf("error patching ScaledObject: %v", err)
+	}
+	fmt.Printf("Updated existing ScaledObject: %s", name)
+	return nil
+}
 func int32Ptr(i int32) *int32 { return &i }
 func init() {
 	CreateDeploymentCmd.Flags().String("name", "", "Name of the deployment")
@@ -228,8 +300,8 @@ func init() {
 	CreateDeploymentCmd.Flags().String("ram-request", "128Mi", "RAM request for the deployment")
 	CreateDeploymentCmd.Flags().String("ram-limit", "512Mi", "RAM limit for the deployment")
 	CreateDeploymentCmd.Flags().StringSlice("ports", []string{}, "Ports to expose (e.g., 80,443)")
-	CreateDeploymentCmd.Flags().String("hpa-target", "", "HPA target metric (e.g., cpu, memory)")
-	CreateDeploymentCmd.Flags().String("event-source", "", "Event source for KEDA metrics (e.g., Kafka, RabbitMQ)")
+	CreateDeploymentCmd.Flags().String("cpu-utilization", "", "HPA target metric cpu")
+	CreateDeploymentCmd.Flags().String("memory-utilization", "", "HPA target metric memory")
 	CreateDeploymentCmd.MarkFlagRequired("image")
 	CreateDeploymentCmd.MarkFlagRequired("name")
 	CreateDeploymentCmd.MarkFlagRequired("namespace")

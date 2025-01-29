@@ -17,6 +17,7 @@ func main() {
 	rootCmd.AddCommand(CreateDeploymentCmd)
 	rootCmd.AddCommand(HealthStatusCmd)
 	rootCmd.AddCommand(DoctorCmd) // Added the doctor command
+	GenerateDocs(rootCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
